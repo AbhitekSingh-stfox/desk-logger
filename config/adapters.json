@@ -1,0 +1,48 @@
+{
+  "Claude.exe": {
+    "chat_pane_selector": {
+      "ControlType": "Group",
+      "ClassName": "overflow-y-auto"
+    },
+    "message_element_selector": [
+      {
+        "ControlType": "Group",
+        "ClassName": "font-claude-message"
+      },
+      {
+        "ControlType": "Group",
+        "ClassName": "group relative flex"
+      }
+    ],
+    "role_selectors": {
+      "user": {
+        "ClassName": "bg-accent"
+      }
+    }
+  },
+  "ChatGPT.exe": {
+    "chat_pane_selector": {
+      "ControlType": "Group",
+      "ClassName": "thread-scroll-container"
+    },
+    "message_element_selector": [
+      {
+        "ControlType": "Group",
+        "ClassName": "bg-token-foreground/5"
+      },
+      {
+        "ControlType": "Button",
+        "ClassName": "bg-token-foreground/5"
+      },
+      {
+        "ControlType": "Group",
+        "ClassName": "_markdownText_"
+      }
+    ],
+    "role_selectors": {
+      "user": {
+        "ClassName": "bg-token-foreground/5"
+      }
+    }
+  }
+}

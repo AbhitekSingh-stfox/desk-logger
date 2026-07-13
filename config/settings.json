@@ -1,0 +1,18 @@
+{
+  "poll_interval_seconds": 1.5,
+  "idle_timeout_minutes": 30,
+  "min_text_length": 10,
+  "debounce_polls": 2,
+  "ignored_text_patterns": [
+    "Send",
+    "Cancel",
+    "Attach",
+    "Ctrl+",
+    "Enter to send",
+    "Copy code",
+    "Try again",
+    "Use Claude to",
+    "Choose a style",
+    "Choose style"
+  ]
+}

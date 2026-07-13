@@ -1,0 +1,12 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local conversation logs (contains private chat history)
+logs/
+
+# IDE settings
+.vscode/
+.idea/
