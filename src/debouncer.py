@@ -85,12 +85,10 @@ class MessageDebouncer:
                         
                         if state["stable_count"] >= self.debounce_polls:
                             state["finalized"] = True
-                            finalized_candidates.append({
-                                "text": text,
-                                "element": cand.get("element"),
-                                "key": key
-                            })
-                            logger.info(f"Message finalized: Key={key[:15]} Text={text[:40]}...")
+                            final_cand = cand.copy()
+                            final_cand["key"] = key
+                            finalized_candidates.append(final_cand)
+                            logger.debug(f"Message finalized: Key={key[:15]} Text={text[:40]}...")
 
         # Clean up stale keys no longer visible in the UI
         # (e.g. scrolled out of view or conversation cleared)

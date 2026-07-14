@@ -27,10 +27,10 @@ class PollingEngine:
         self.debouncer = MessageDebouncer(debounce_polls=debounce_polls)
         self.deduplicator = MessageDeduplicator()
         self.tracker = ConversationTracker(idle_timeout_minutes=idle_timeout)
-        
-        # Load existing hashes on startup so we don't log them again
-        from src.log_writer import DEFAULT_LOG_FILE
-        self.deduplicator.load_existing_hashes(DEFAULT_LOG_FILE)
+        # Track current conversation ID per target process key (name, pid)
+        self._current_conv_ids = {}
+        # Track target process PIDs to suppress logging scan spam
+        self._last_logged_pids = set()
         
         # In-process toggle state
         self.is_logging_active = True
@@ -129,10 +129,17 @@ class PollingEngine:
         import psutil
         now = time.time()
         if now - self._last_process_scan_time > 10.0 or not self._cached_targets:
-            self._cached_targets = process_matcher.get_running_targets(self.apps_config_path)
+            new_targets = process_matcher.get_running_targets(self.apps_config_path)
             self._last_process_scan_time = now
-            if self._cached_targets:
-                logger.info(f"Active target apps detected (full scan): {self._cached_targets}")
+            
+            new_pids = {t["pid"] for t in new_targets}
+            if new_pids != self._last_logged_pids:
+                if new_targets:
+                    logger.info(f"Active target apps updated: {new_targets}")
+                else:
+                    logger.info("No active target apps detected.")
+                self._last_logged_pids = new_pids
+            self._cached_targets = new_targets
         else:
             # Lightweight verification of already matched PIDs to save CPU
             valid_targets = []
@@ -162,6 +169,8 @@ class PollingEngine:
                 self.deduplicator.clear_conversation(conv_id)
                 if conv_id in self._last_roles:
                     del self._last_roles[conv_id]
+                if key in self._current_conv_ids:
+                    del self._current_conv_ids[key]
         
         self._active_pids = current_pids
 
@@ -193,35 +202,94 @@ class PollingEngine:
             # Locate candidate message text blocks
             candidates = chat_pane_locator.locate_messages(pid, name, self.adapters_config_path, self.settings)
             
-            # Pass candidates to debouncer
-            finalized = self.debouncer.process_candidates(candidates)
-            
-            if not finalized:
+            # Fetch unique conversation ID
+            conv_id = self.tracker.get_conversation_id(name, pid, window_title)
+
+            # Check if this is a new conversation session for this process
+            key = (name, pid)
+            is_new_session = False
+            if self._current_conv_ids.get(key) != conv_id:
+                is_new_session = True
+                self._current_conv_ids[key] = conv_id
+
+            # Detect roles for candidates in sequence to support alternation fallbacks
+            prev_role = self._last_roles.get(conv_id)
+            candidate_roles = []
+            for cand in candidates:
+                role = role_detector.detect_role(
+                    candidate=cand,
+                    previous_role=prev_role,
+                    adapter_config=adapter_config,
+                    reference_control=window
+                )
+                candidate_roles.append((cand, role))
+                prev_role = role
+
+            # Group consecutive candidates of the same role into unified turns
+            turns = []
+            for cand, role in candidate_roles:
+                if not turns or turns[-1]["role"] != role:
+                    turns.append({
+                        "role": role,
+                        "text_parts": [cand["text"]],
+                        "element": cand["element"]
+                    })
+                else:
+                    turns[-1]["text_parts"].append(cand["text"])
+
+            for turn in turns:
+                turn["text"] = "\n".join(turn["text_parts"])
+
+            # Handle new session initialization (only log future turns)
+            if is_new_session:
+                logger.info(f"[{name}] New conversation session detected: {conv_id}. Marking {len(turns)} existing turns as logged.")
+                for turn in turns:
+                    content = turn["text"]
+                    self.deduplicator.mark_logged(conv_id, content)
+                    
+                    # Populate debouncer so we don't treat them as new candidates later
+                    deb_key = self.debouncer._get_candidate_key(turn)
+                    self.debouncer.active_messages[deb_key] = {
+                        "text": content,
+                        "stable_count": self.debouncer.debounce_polls,
+                        "finalized": True
+                    }
+                
+                # Set initial state context for role alternation and user pending buffer
+                if turns:
+                    last_role = turns[-1]["role"]
+                    self._last_roles[conv_id] = last_role
+                    
+                    # Find the user turn to buffer (if any)
+                    user_turn = None
+                    if last_role == "user":
+                        user_turn = turns[-1]
+                    elif last_role == "assistant" and len(turns) >= 2 and turns[-2]["role"] == "user":
+                        user_turn = turns[-2]
+                        
+                    if user_turn:
+                        self._pending_user[conv_id] = {
+                            "text": user_turn["text"],
+                            "timestamp": time.time()
+                        }
                 continue
 
-            # Process finalized messages
-            for msg in finalized:
-                content = msg["text"]
-                elem = msg["element"]
+            # Pass unified turns to debouncer
+            finalized_turns = self.debouncer.process_candidates(turns)
+            
+            if not finalized_turns:
+                continue
 
-                # Fetch unique conversation ID
-                conv_id = self.tracker.get_conversation_id(name, pid, window_title)
+            # Process finalized turns
+            for turn in finalized_turns:
+                content = turn["text"]
+                role = turn["role"]
 
                 # Deduplication check
                 source_name = name.lower().replace(".exe", "")
                 if self.deduplicator.is_duplicate(conv_id, content, source=source_name):
                     continue
 
-                # Determine sender role
-                prev_role = self._last_roles.get(conv_id)
-                role = role_detector.detect_role(
-                    candidate=msg,
-                    previous_role=prev_role,
-                    adapter_config=adapter_config,
-                    reference_control=window
-                )
-
-                # Handle combined user and assistant message pairs
                 if role == "user":
                     self._pending_user[conv_id] = {
                         "text": content,

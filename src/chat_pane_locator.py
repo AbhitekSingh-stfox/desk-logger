@@ -105,6 +105,15 @@ def find_all_elements_by_selector(parent, selector) -> list:
     recursive_walk(parent)
     return results
 
+SKIP_SUBTREE_CONTROL_TYPES = {
+    "EditControl",
+    "ScrollBarControl",
+    "TitleBarControl",
+    "MenuBarControl",
+    "ToolBarControl",
+    "ComboBoxControl"
+}
+
 def walk_tree_for_text(control, min_len: int, ignored_patterns: list, results: list, max_depth: int = 15, current_depth: int = 0):
     """Recursively walks the control tree to extract candidate text blocks."""
     if current_depth > max_depth:
@@ -112,6 +121,9 @@ def walk_tree_for_text(control, min_len: int, ignored_patterns: list, results: l
         
     try:
         control_type = control.ControlTypeName
+        if control_type in SKIP_SUBTREE_CONTROL_TYPES:
+            return
+            
         name = control.Name
         
         # We primarily capture text elements that represent messages.
@@ -130,6 +142,64 @@ def walk_tree_for_text(control, min_len: int, ignored_patterns: list, results: l
             walk_tree_for_text(child, min_len, ignored_patterns, results, max_depth, current_depth + 1)
     except Exception:
         pass
+
+def is_block_control(control) -> bool:
+    """Checks if a control type is a structural UIA block element."""
+    try:
+        ctype = control.ControlTypeName
+        if ctype in ("ListControl", "TableControl", "ListItemControl", "GroupControl", "HeaderControl", "PaneControl", "DocumentControl"):
+            return True
+        return False
+    except Exception:
+        return False
+
+def is_block_container(control) -> bool:
+    """Determines if a control is a block container that should separate child blocks with newlines."""
+    try:
+        ctype = control.ControlTypeName
+        if ctype in ("ListControl", "TableControl"):
+            return True
+        if ctype == "ListItemControl":
+            return False
+        if ctype in ("GroupControl", "PaneControl", "DocumentControl"):
+            for child in control.GetChildren():
+                if is_block_control(child):
+                    return True
+        return False
+    except Exception:
+        return False
+
+def extract_text_hierarchical(control) -> str:
+    """Extracts text from a control using generic UIA structural rules, avoiding internal newlines for inline segments."""
+    try:
+        control_type = control.ControlTypeName
+        if control_type in SKIP_SUBTREE_CONTROL_TYPES:
+            return ""
+            
+        name = control.Name or ""
+        
+        if control_type == "TextControl":
+            return name
+            
+        children = control.GetChildren()
+        if not children:
+            return name
+            
+        child_texts = []
+        for child in children:
+            t = extract_text_hierarchical(child)
+            if t:
+                child_texts.append(t)
+                
+        if not child_texts:
+            return name
+            
+        if is_block_container(control):
+            return "\n".join(t.strip() for t in child_texts if t.strip())
+        else:
+            return "".join(child_texts)
+    except Exception:
+        return ""
 
 def locate_messages(pid: int, process_name: str, adapters_config_path: str, settings: dict) -> list[dict]:
     """
@@ -176,14 +246,9 @@ def locate_messages(pid: int, process_name: str, adapters_config_path: str, sett
                 candidates = []
                 for elem in msg_elements:
                     try:
-                        # Extract the text content of the message node (could be nested)
-                        # We can walk the message node to get all sub-texts or use its Name/Value.
-                        # Electron message bubbles usually expose text via sub-elements or the main Name.
-                        texts = []
-                        walk_tree_for_text(elem, min_len=1, ignored_patterns=[], results=texts)
-                        if texts:
-                            # Join multiple paragraphs
-                            combined_text = "\n".join(t["text"] for t in texts)
+                        # Extract the text content of the message node hierarchically
+                        combined_text = extract_text_hierarchical(elem)
+                        if combined_text:
                             candidates.append({
                                 "text": combined_text.strip(),
                                 "element": elem

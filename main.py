@@ -20,13 +20,39 @@ logging.basicConfig(
     ]
 )
 
+import ctypes
+import getpass
+
 logger = logging.getLogger("AIActivityLogger.Main")
+
+# Keep reference to the mutex to prevent it from being garbage collected
+_mutex_ref = None
+
+def check_single_instance() -> bool:
+    global _mutex_ref
+    ERROR_ALREADY_EXISTS = 183
+    kernel32 = ctypes.windll.kernel32
+    
+    username = getpass.getuser()
+    # Mutex name is user-specific to support multi-session Windows servers
+    mutex_name = f"Global\\AIActivityLoggerMutex_{username}"
+    
+    _mutex_ref = kernel32.CreateMutexW(None, False, mutex_name)
+    last_error = kernel32.GetLastError()
+    if last_error == ERROR_ALREADY_EXISTS:
+        return False
+    return True
 
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="AI Conversation Activity Logger")
     parser.add_argument("--console", action="store_true", help="Run in headless console mode without system tray")
     args = parser.parse_args()
+
+    # Setup single-instance check
+    if not check_single_instance():
+        logger.critical("Another instance of AI Activity Logger is already running for this user. Exiting to prevent duplicate logs.")
+        sys.exit(1)
 
     logger.info("Initializing Desktop AI Conversation Logger...")
 
@@ -78,10 +104,22 @@ def main():
     # Start background polling thread
     poller.start()
 
+    # Setup signal handling to ensure graceful terminate on Ctrl+C / SIGINT / SIGTERM
+    import signal
+    def handle_exit_signal(sig, frame):
+        logger.info("Shutdown signal received. Stopping background poller...")
+        poller.stop()
+        logger.info("Clean shutdown complete. Exiting.")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, handle_exit_signal)
+    signal.signal(signal.SIGTERM, handle_exit_signal)
+
     # Callback when application shuts down
     def on_quit():
         logger.info("Clean shutdown complete. Exiting.")
-        sys.exit(0)
+        poller.stop()
+        os._exit(0)
 
     # Initialize and run system tray menu (runs on main thread, blocking)
     try:
@@ -90,11 +128,11 @@ def main():
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received. Shutting down...")
         poller.stop()
-        sys.exit(0)
+        os._exit(0)
     except Exception as e:
         logger.critical(f"Unhandled exception in main tray thread: {e}", exc_info=True)
         poller.stop()
-        sys.exit(1)
+        os._exit(1)
 
 if __name__ == "__main__":
     main()

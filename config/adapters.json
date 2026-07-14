@@ -35,7 +35,6 @@
         "ClassName": "bg-token-foreground/5"
       },
       {
-        "ControlType": "Group",
         "ClassName": "_markdownText_"
       }
     ],

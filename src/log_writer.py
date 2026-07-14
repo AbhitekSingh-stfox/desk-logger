@@ -36,6 +36,17 @@ def redact_sensitive_data(text: str) -> str:
         redacted = pattern.sub("[REDACTED_SENSITIVE_DATA]", redacted)
     return redacted
 
+def clean_text_for_logging(text: str) -> str:
+    """Cleans up text for logs: redacts secrets, replaces newlines with space, and collapses whitespace."""
+    if not text:
+        return text
+    redacted = redact_sensitive_data(text)
+    # Replace all newlines and carriage returns with a space
+    cleaned = redacted.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    # Collapse multiple consecutive spaces
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
 def get_iana_timezone() -> str:
     """Returns the current IANA timezone name."""
     try:
@@ -52,7 +63,7 @@ def write_log_entry(source: str, conversation_id: str, role: str, content: str, 
     Constructs a schema-compliant log entry and appends it to the logs.jsonl file safely.
     Uses owner-only file permissions on creation.
     """
-    content = redact_sensitive_data(content)
+    content = clean_text_for_logging(content)
     
     # 1. Prepare timestamp data
     now_utc = datetime.now(timezone.utc)
@@ -114,8 +125,8 @@ def write_combined_log_entry(source: str, conversation_id: str, user_content: st
     and appends it to the logs.jsonl file safely.
     Uses owner-only file permissions on creation.
     """
-    user_content = redact_sensitive_data(user_content)
-    assistant_content = redact_sensitive_data(assistant_content)
+    user_content = clean_text_for_logging(user_content)
+    assistant_content = clean_text_for_logging(assistant_content)
 
     # 1. Prepare timestamp data
     now_utc = datetime.now(timezone.utc)
